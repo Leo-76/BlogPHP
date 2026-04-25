@@ -152,4 +152,4 @@ MAIL_FROM_ADDRESS=no-reply@blogphp.com
 ```
 
 ## License
-MIT © Stanley
+MIT © 

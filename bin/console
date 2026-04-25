@@ -1,0 +1,153 @@
+#!/usr/bin/env php
+<?php
+define('BASE_PATH', dirname(__DIR__));
+
+// Autoload
+if (file_exists(BASE_PATH . '/vendor/autoload.php')) {
+    require BASE_PATH . '/vendor/autoload.php';
+} else {
+    spl_autoload_register(function (string $class) {
+        if (str_starts_with($class, 'App\\')) {
+            $file = BASE_PATH . '/src/' . str_replace('\\', '/', substr($class, 4)) . '.php';
+            if (file_exists($file)) require $file;
+        }
+    });
+    if (file_exists(BASE_PATH . '/.env')) {
+        foreach (file(BASE_PATH . '/.env') as $line) {
+            $line = trim($line);
+            if (!$line || str_starts_with($line, '#') || !str_contains($line, '=')) continue;
+            [$k, $v] = explode('=', $line, 2);
+            $_ENV[trim($k)] = $_SERVER[trim($k)] = trim(trim($v), '"\'');
+        }
+    }
+    require BASE_PATH . '/src/Core/helpers.php';
+}
+
+$app     = new App\Core\Application(BASE_PATH);
+$command = $argv[1] ?? 'help';
+$args    = array_slice($argv, 2);
+
+// Couleurs terminal
+$green  = "\033[32m";
+$yellow = "\033[33m";
+$cyan   = "\033[36m";
+$red    = "\033[31m";
+$reset  = "\033[0m";
+
+echo "\n{$cyan}BlogPHP Console{$reset}\n";
+echo str_repeat('─', 40) . "\n\n";
+
+match($command) {
+
+    // ── Migrations ──────────────────────────────
+    'migrate' => (function() use ($green, $yellow, $reset) {
+        echo "Migrations :\n";
+        $pdo = app('db');
+        $pdo->exec("CREATE TABLE IF NOT EXISTS migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, migration TEXT NOT NULL, run_at TEXT DEFAULT (datetime('now')))");
+        $files = glob(BASE_PATH . '/database/migrations/*.php');
+        sort($files);
+        foreach ($files as $file) {
+            $name = basename($file);
+            $done = $pdo->query("SELECT COUNT(*) FROM migrations WHERE migration='{$name}'")->fetchColumn();
+            if ($done) { echo "  {$yellow}skip{$reset}  {$name}\n"; continue; }
+            (require $file)->up($pdo);
+            $pdo->exec("INSERT INTO migrations (migration) VALUES ('{$name}')");
+            echo "  {$green}run{$reset}   {$name}\n";
+        }
+        echo "\n✓ Terminé.\n\n";
+    })(),
+
+    'migrate:fresh' => (function() use ($green, $reset) {
+        echo "Remise à zéro de la BDD...\n";
+        $pdo   = app('db');
+        $files = glob(BASE_PATH . '/database/migrations/*.php');
+        rsort($files);
+        foreach ($files as $file) {
+            $obj = require $file;
+            if (method_exists($obj, 'down')) { $obj->down($pdo); echo "  rolled back " . basename($file) . "\n"; }
+        }
+        $pdo->exec("DROP TABLE IF EXISTS migrations");
+        // Relancer
+        passthru('php ' . BASE_PATH . '/bin/console migrate');
+    })(),
+
+    'migrate:rollback' => (function() use ($yellow, $reset) {
+        echo "Rollback de la dernière migration :\n";
+        $pdo  = app('db');
+        $last = $pdo->query("SELECT migration FROM migrations ORDER BY id DESC LIMIT 1")->fetchColumn();
+        if (!$last) { echo "  Aucune migration à annuler.\n\n"; return; }
+        $file = BASE_PATH . '/database/migrations/' . $last;
+        if (file_exists($file)) { (require $file)->down($pdo); }
+        $pdo->exec("DELETE FROM migrations WHERE migration='{$last}'");
+        echo "  {$yellow}rolled back{$reset}  {$last}\n\n";
+    })(),
+
+    // ── Générateurs ─────────────────────────────
+    'make:controller' => (function() use ($args, $red, $reset) {
+        if (empty($args[0])) { echo "{$red}Usage:{$reset} php bin/console make:controller NomController\n\n"; return; }
+        (new App\Console\Commands\MakeController())->handle($args[0]);
+        echo "\n";
+    })(),
+
+    'make:model' => (function() use ($args, $red, $reset) {
+        if (empty($args[0])) { echo "{$red}Usage:{$reset} php bin/console make:model NomModel [--migration]\n\n"; return; }
+        $withMigration = in_array('--migration', $args);
+        (new App\Console\Commands\MakeModel())->handle($args[0], $withMigration);
+        echo "\n";
+    })(),
+
+    'make:migration' => (function() use ($args, $red, $reset) {
+        if (empty($args[0])) { echo "{$red}Usage:{$reset} php bin/console make:migration create_xxx_table\n\n"; return; }
+        (new App\Console\Commands\MakeMigration())->handle($args[0]);
+        echo "\n";
+    })(),
+
+    'make:middleware' => (function() use ($args, $red, $reset) {
+        if (empty($args[0])) { echo "{$red}Usage:{$reset} php bin/console make:middleware NomMiddleware\n\n"; return; }
+        (new App\Console\Commands\MakeMiddleware())->handle($args[0]);
+        echo "\n";
+    })(),
+
+    // ── Cache ────────────────────────────────────
+    'cache:clear' => (function() use ($green, $reset) {
+        cache()->flush();
+        echo "  {$green}✓{$reset} Cache vidé.\n\n";
+    })(),
+
+    // ── Infos ────────────────────────────────────
+    'routes' => (function() use ($cyan, $green, $yellow, $reset) {
+        echo "Routes enregistrées :\n\n";
+        echo sprintf("  %-6s %-35s %s\n", "METHOD", "PATH", "ACTION");
+        echo str_repeat('─', 70) . "\n";
+        // Parser routes/web.php pour afficher
+        $content = file_get_contents(BASE_PATH . '/routes/web.php');
+        preg_match_all('/\$router->(get|post)\(\'([^\']+)\',\s*\'([^\']+)\'/', $content, $m, PREG_SET_ORDER);
+        foreach ($m as $r) {
+            $color = $r[1] === 'get' ? $green : $yellow;
+            echo sprintf("  {$color}%-6s{$reset} %-35s %s\n", strtoupper($r[1]), $r[2], $r[3]);
+        }
+        echo "\n";
+    })(),
+
+    'serve' => (function() use ($green, $reset) {
+        $host = $_SERVER['argv'][2] ?? 'localhost:8080';
+        echo "  {$green}✓{$reset} Serveur démarré sur http://{$host}\n\n";
+        passthru("php -S {$host} " . BASE_PATH . "/router.php");
+    })(),
+
+    // ── Help ─────────────────────────────────────
+    default => (function() use ($cyan, $green, $yellow, $reset) {
+        echo "Commandes disponibles :\n\n";
+        $cmds = [
+            'Migrations'   => ['migrate', 'migrate:fresh', 'migrate:rollback'],
+            'Générateurs'  => ['make:controller <Nom>', 'make:model <Nom> [--migration]', 'make:migration <create_xxx_table>', 'make:middleware <Nom>'],
+            'Cache'        => ['cache:clear'],
+            'Divers'       => ['routes', 'serve [host:port]'],
+        ];
+        foreach ($cmds as $section => $list) {
+            echo "  {$cyan}{$section}{$reset}\n";
+            foreach ($list as $cmd) echo "    {$green}php bin/console {$cmd}{$reset}\n";
+            echo "\n";
+        }
+    })(),
+};

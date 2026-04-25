@@ -1,0 +1,11 @@
+/vendor/
+/storage/logs/*.log
+/storage/cache/*
+/storage/sessions/sess_*
+/database/database.sqlite
+/public/uploads/*
+!public/uploads/.gitkeep
+/.env
+*.DS_Store
+composer.lock
+.phpunit.cache/

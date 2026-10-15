@@ -1,5 +1,5 @@
 {
-    "name": "stanley/blogphp-symfony",
+    "name": "leo-76/blogphp",
     "description": "BlogPHP avec composants Symfony — HttpFoundation, Routing, Validator, Cache, Mailer, Security",
     "type": "project",
     "license": "MIT",
